@@ -256,6 +256,9 @@ def auth_callback(username: str, password: str):
         return cl.User(identifier="admin", metadata={"role": "admin"})
     return None
 
+@cl.on_chat_resume
+async def on_chat_resume(thread):
+    pass
 
 @cl.data_layer
 def get_data_layer():
@@ -269,6 +272,13 @@ async def start():
         "Ready. I can do math, tell the time, keep notes and tasks, and read web pages."
     ).send()
 
+@cl.on_chat_resume
+async def on_chat_resume(thread: dict):
+    # step 1: extract and save the previous chat messages in the session from the thread history
+    cl.user_session.set("chat_history", thread["steps"])
+    
+    # Step 2: (Optional) indicate to the user that their chat history has been restored
+    await cl.Message(content="Welcome back! Your chat history has been restored.").send()
 
 @cl.on_message
 async def on_message(msg: cl.Message):

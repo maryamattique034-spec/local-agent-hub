@@ -34,6 +34,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
+import certifi
+import ssl
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
+
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("local-tools")
@@ -324,6 +328,13 @@ class _SafeRedirect(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+
+
+def _opener():
+    return build_opener(_SafeRedirect, HTTPSHandler(context=_SSL_CONTEXT))
+
+
 @mcp.tool()
 def fetch_webpage(url: str) -> str:
     """Download a web page and return its readable text.
@@ -341,7 +352,7 @@ def fetch_webpage(url: str) -> str:
     try:
         _check_url(url)
         req = Request(url, headers={"User-Agent": "local-agent-hub/1.0"})
-        with build_opener(_SafeRedirect).open(req, timeout=10) as resp:
+        with _opener().open(req, timeout=10) as resp:
             ctype = resp.headers.get_content_type()
             if ctype not in ("text/html", "text/plain"):
                 return f"Error: unsupported content type '{ctype}' (only text pages)."
