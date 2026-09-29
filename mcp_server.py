@@ -31,6 +31,9 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
+
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("local-tools")
@@ -39,6 +42,11 @@ BASE = Path(__file__).parent.resolve() / "workspace"
 NOTES_DIR = BASE / "notes"
 TASKS_FILE = BASE / "tasks.json"
 NOTES_DIR.mkdir(parents=True, exist_ok=True)
+
+# for export_to_excel tool
+EXPORTS_DIR = BASE / "exports"
+EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 
 # =============================================================== 1. CALCULATOR
@@ -347,6 +355,49 @@ def fetch_webpage(url: str) -> str:
     parser.feed(html)
     text = re.sub(r"\s+", " ", " ".join(parser.parts)).strip()
     return f"URL: {url}\n\n{text[:5000]}" if text else "Error: page has no readable text."
+
+
+@mcp.tool()
+def export_to_excel(filename: str, rows_json: str) -> str:
+    """Export tabular data as a downloadable Excel (.xlsx) file.
+
+    Use when: the user asks to "export this as Excel", "make a spreadsheet",
+    "save this as a file", or similar — AFTER you already have the data
+    (e.g. from another tool's output). Never invent data; only export data
+    you actually have from a previous tool result or the conversation.
+
+    Args:
+        filename: Desired file name without extension, e.g. "biblio_mismatch_report".
+        rows_json: A JSON string representing a list of objects (rows), all
+            sharing the same keys, e.g.
+            '[{"title": "...", "expected": "...", "found": "..."}, ...]'
+
+    Returns:
+        "EXPORTED:<absolute file path>" on success, or "Error: ..." on failure.
+    """
+    try:
+        rows = json.loads(rows_json)
+        if not isinstance(rows, list) or not rows:
+            return "Error: rows_json must be a non-empty JSON list of objects."
+    except json.JSONDecodeError as e:
+        return f"Error: invalid JSON ({e})"
+
+    clean_name = re.sub(r"[^a-zA-Z0-9_-]", "_", filename.strip()) or "export"
+    path = EXPORTS_DIR / f"{clean_name}.xlsx"
+
+    wb = Workbook()
+    ws = wb.active
+    headers = list(rows[0].keys())
+    ws.append(headers)
+    for row in rows:
+        ws.append([row.get(h, "") for h in headers])
+
+    for i, h in enumerate(headers, start=1):
+        width = max(len(h), *(len(str(r.get(h, ""))) for r in rows)) + 2
+        ws.column_dimensions[get_column_letter(i)].width = min(width, 50)
+
+    wb.save(path)
+    return f"EXPORTED:{path}"
 
 
 if __name__ == "__main__":

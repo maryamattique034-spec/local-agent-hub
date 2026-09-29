@@ -10,6 +10,10 @@ Sections in this file, top to bottom:
   3. LangGraph           - state, nodes, edges, routers (the "wiring")
   4. Chainlit UI          - the chat window (the "face")
 """
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import os
 import sys
 from pathlib import Path
@@ -29,6 +33,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
+from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
 
 MODEL = os.getenv("QWEN_MODEL", "qwen2.5:7b")  # try QWEN_MODEL=qwen3:8b to compare
 MAX_STEPS = 6  # safety: max model calls per user message
@@ -128,6 +133,8 @@ def build_graph(tools):
             "- remember / save something -> save_note; recall it -> list_notes then read_note\n"
             "- to-do items -> add_task, list_tasks, complete_task\n"
             "- a URL the user gives -> fetch_webpage\n"
+            "- exporting results as a file (Excel/spreadsheet) -> export_to_excel, "
+            "using the data you already gathered from a previous tool call\n"
             "If no tool fits, just answer. Never invent tool results. "
             "After you get tool results, answer clearly and briefly.\n\n"
             f"Your plan for this question:\n{state['plan']}"
@@ -233,6 +240,28 @@ def describe(node: str, data: dict) -> str:
     return "\n".join(lines)
 
 
+def extract_exported_file(messages) -> Path | None:
+    """Check the latest tool messages for a file the export tool created."""
+    for m in latest_tool_messages(messages):
+        text = as_text(m.content)
+        if text.startswith("EXPORTED:"):
+            return Path(text.removeprefix("EXPORTED:").strip())
+    return None
+
+# generate key by chainlit create-secret and add it in .env file as CHAINLIT_AUTH_SECRET=your_secret_key
+@cl.password_auth_callback
+def auth_callback(username: str, password: str):
+    # replace with real user lookup later
+    if username == "admin" and password == "4121":
+        return cl.User(identifier="admin", metadata={"role": "admin"})
+    return None
+
+
+@cl.data_layer
+def get_data_layer():
+    return SQLAlchemyDataLayer(conninfo="sqlite+aiosqlite:///chainlit.db")
+
+
 @cl.on_chat_start
 async def start():
     await get_graph()  # starts mcp_server.py + loads its tools (a few seconds)
@@ -248,6 +277,7 @@ async def on_message(msg: cl.Message):
     inputs = {"messages": [HumanMessage(msg.content)], "steps": 0}
 
     final = None
+    exported_file = None
     async for update in graph.astream(inputs, config, stream_mode="updates"):
         for node, data in update.items():
             if not data:
@@ -256,9 +286,19 @@ async def on_message(msg: cl.Message):
             async with cl.Step(name=f"node: {node}", type="tool") as step:
                 step.output = describe(node, data)
 
+            if node == "tools":
+                found = extract_exported_file(data.get("messages", []))
+                if found:
+                    exported_file = found
+
             if node in ("agent", "give_up"):
                 last = data["messages"][-1]
                 if not getattr(last, "tool_calls", None):
                     final = as_text(last.content)
 
-    await cl.Message(content=final or "(no answer)").send()
+
+    elements = []
+    if exported_file and exported_file.exists():
+        elements.append(cl.File(name=exported_file.name, path=str(exported_file)))
+
+    await cl.Message(content=final or "(no answer)", elements=elements).send()

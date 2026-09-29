@@ -4,3 +4,5 @@ __pycache__/
 
 # Chainlit
 .chainlit/
+chainlit.db
+.env
